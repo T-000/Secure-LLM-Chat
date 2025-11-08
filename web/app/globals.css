@@ -4,3 +4,12 @@
 
 /* minimal reset */
 html, body { height: 100%; }
+
+/* subtle fade animation for streaming */
+.typing {
+  animation: typingFade 0.2s ease-in-out alternate infinite;
+}
+@keyframes typingFade {
+  from { opacity: 0.5; }
+  to { opacity: 1; }
+}

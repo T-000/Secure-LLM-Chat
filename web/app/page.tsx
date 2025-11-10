@@ -2,6 +2,7 @@
 import { useRef, useState } from "react";
 import MessageBubble from "./components/MessageBubble";
 import SettingsPanel, { Settings } from "./components/SettingsPanel";
+import clsx from "clsx";
 
 type Message = {
   id: string;
@@ -12,7 +13,7 @@ type Message = {
 
 export default function Page() {
   const [messages, setMessages] = useState<Message[]>([
-    { id: "w1", role: "assistant", content: "Hello! Secure LLM Chat is ready." },
+    { id: "init", role: "assistant", content: "👋 Hello! I’m ready to chat securely." },
   ]);
   const [input, setInput] = useState("");
   const [isStreaming, setStreaming] = useState(false);
@@ -21,13 +22,14 @@ export default function Page() {
   const abortRef = useRef<AbortController | null>(null);
 
   const [settings, setSettings] = useState<Settings>({
-    system: "You are a helpful, secure assistant.",
+    system: "You are a helpful assistant focused on clarity and security.",
     temperature: 0.7,
     maxTokens: 1024,
   });
 
   async function onSend() {
     if (!input.trim() || isStreaming) return;
+
     const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: input };
     setMessages((m) => [...m, userMsg]);
     setInput("");
@@ -43,6 +45,8 @@ export default function Page() {
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           messages: [
             { role: "system", content: settings.system },
@@ -54,22 +58,7 @@ export default function Page() {
           ],
           settings,
         }),
-        signal: controller.signal,
-        headers: { "Content-Type": "application/json" },
       });
-      if (!res.ok) {
-        const err = await res.text();
-        setMessages(m => [...m, {
-          id: "cap-" + Date.now(),
-          role: "assistant",
-          content: "The model is temporarily at capacity. I tried fallback models, but none were available.\nPlease try again in a moment.",
-        }]);
-        setStreaming(false);
-        return;
-      }
-
-
-
 
       const riskScore = Number(res.headers.get("X-Risk-Score") ?? "0");
       let acc = "";
@@ -83,49 +72,30 @@ export default function Page() {
         if (done) break;
         const text = decoder.decode(value);
 
-        // 首字节到达算首包时延
         if (first) {
           setLatency(Math.round(performance.now() - t0));
           first = false;
         }
 
         acc += text;
-
-        const parts = acc.split("[__METRICS__]");
-        const display = parts[0];
-        const metrics = parts[1];
-
         setMessages((prev) => {
           const copy = [...prev];
           const last = copy[copy.length - 1];
-          if (last?.role === "assistant") {
-            last.content = display;
-            last.risk = { score: riskScore, hits: [] };
-          } else {
+          if (last?.role === "assistant") last.content = acc;
+          else
             copy.push({
               id: "assist-" + Date.now(),
               role: "assistant",
-              content: display,
+              content: acc,
               risk: { score: riskScore, hits: [] },
             });
-          }
           return copy;
         });
-
-        if (metrics) {
-          try {
-            const meta = JSON.parse(metrics.trim());
-            setLatency(meta.latencyMs ?? null);
-            setTokens(meta.usage?.totalTokens ?? null);
-          } catch {
-            // ignore bad json
-          }
-        }
       }
     } catch {
       setMessages((m) => [
         ...m,
-        { id: "err", role: "assistant", content: "Request aborted or failed." },
+        { id: "err", role: "assistant", content: "⚠️ Request aborted or failed." },
       ]);
     } finally {
       setStreaming(false);
@@ -138,52 +108,82 @@ export default function Page() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col mx-auto max-w-4xl p-6 bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 dark:from-gray-950 dark:via-slate-900 dark:to-black transition-colors duration-500">
-
-      <div className="rounded-3xl border border-zinc-200/50 dark:border-zinc-700/50 bg-white/60 dark:bg-zinc-900/60 backdrop-blur-md shadow-inner p-6 min-h-[60vh] overflow-y-auto transition-all duration-300">
-
-        <h1 className="text-2xl font-semibold">Secure LLM Chat</h1>
-        <div className="text-xs text-gray-600 dark:text-gray-400">
-          <span className="mr-3">Latency: {latency ?? "-"} ms</span>
-          <span>Tokens: {tokens ?? "-"}</span>
+    <main className="min-h-screen flex flex-col text-white bg-gradient-to-br from-[#1e3a8a] via-[#1e40af] to-[#2563eb] transition-colors duration-500">
+      {/* 顶部 */}
+      <header className="mx-auto w-full max-w-4xl px-6 pt-6 pb-2">
+        <div className="flex items-end justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold">Secure LLM Chat</h1>
+            <div className="mt-1 text-xs text-blue-100/90">
+              <span className="mr-3">Latency: {latency ?? "-"} ms</span>
+              <span>Tokens: {tokens ?? "-"}</span>
+            </div>
+          </div>
+          <div className="hidden md:block rounded-2xl bg-blue-300/20 backdrop-blur-md p-2 shadow-md">
+            <SettingsPanel value={settings} onChange={setSettings} />
+          </div>
         </div>
-      </div>
+      </header>
 
-      <div className="rounded-2xl border p-4 min-h-[60vh]">
-        {messages.map((m) => (
-          <MessageBubble key={m.id} role={m.role} content={m.content} risk={m.risk} />
-        ))}
-      </div>
+      {/* 聊天区 */}
+      <section className="mx-auto w-full max-w-4xl px-6 flex-1">
+        <div className="h-full rounded-3xl bg-[#3b82f6]/20 backdrop-blur-lg shadow-[0_8px_30px_rgba(0,0,0,0.2)] p-5 overflow-y-auto">
+          {messages.length === 0 && (
+            <div className="text-center text-blue-100/70 mt-24">
+              👋 Start a conversation…
+            </div>
+          )}
+          <div className="flex flex-col gap-3">
+            {messages.map((m) => (
+              <MessageBubble
+                key={m.id}
+                role={m.role}
+                content={m.content}
+                risk={m.risk}
+                isStreaming={isStreaming}
+              />
+            ))}
+          </div>
+        </div>
+      </section>
 
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_280px] gap-4 mt-4">
-        <div className="flex gap-2">
-          <input
-            className="flex-1 rounded-full border px-4 py-2 shadow-sm bg-white/80 dark:bg-zinc-800/70 backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-blue-400 transition-all"
-            placeholder="Type something..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && onSend()}
-          />
-          <button
-            className="px-4 py-2 rounded bg-blue-600 text-white disabled:opacity-50"
-            onClick={onSend}
-            disabled={isStreaming}
-          >
-            Send
-          </button>
-          <button
-            className="px-4 py-2 rounded-full bg-blue-600 text-white hover:bg-blue-700 transition disabled:opacity-50"
-            onClick={onStop}
-            disabled={!isStreaming}
-          >
-            Stop
-          </button>
+      {/* 输入区 */}
+      <footer className="w-full py-6 flex justify-center">
+        <div className="relative w-[min(92%,720px)] max-w-2xl">
+          <div className="rounded-2xl bg-[#60a5fa]/30 backdrop-blur-md shadow-lg">
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && onSend()}
+              placeholder={isStreaming ? "Waiting..." : "Type your message…"}
+              disabled={isStreaming}
+              className={clsx(
+                "w-full h-[56px] px-4 pr-28 outline-none bg-transparent text-[15px] leading-6 text-white placeholder:text-blue-100/70",
+                isStreaming && "opacity-70"
+              )}
+            />
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-2">
+              <button
+                onClick={onSend}
+                disabled={isStreaming}
+                className="px-3 py-1.5 rounded-xl bg-blue-500 hover:bg-blue-400 transition text-white disabled:opacity-50"
+              >
+                Send
+              </button>
+              <button
+                onClick={onStop}
+                disabled={!isStreaming}
+                className="px-3 py-1.5 rounded-xl bg-blue-300/40 hover:bg-blue-400/40 transition text-white disabled:opacity-50"
+              >
+                Stop
+              </button>
+            </div>
+          </div>
+          <div className="mt-1 text-[11px] text-blue-100/70 text-right">
+            Press ⏎ to send
+          </div>
         </div>
-        <div className="rounded-2xl border p-2">
-          <SettingsPanel value={settings} onChange={setSettings} />
-        </div>
-      </div>
+      </footer>
     </main>
   );
 }
-// VPCwC0MnR6M8GusLs8ubFG57jjIc2ZRf
